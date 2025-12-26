@@ -1,11 +1,59 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use chrono::DateTime;
 use chrono_tz::Tz;
-use sqlx::PgPool;
+use macaddr::MacAddr6;
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
-use crate::switchbot::Measurement;
+use crate::switchbot::{Device, DeviceType, Measurement};
 
-pub async fn bulk_insert_measurements(pool: &PgPool, measurments: &[Measurement]) -> Result<()> {
+pub async fn new_pool(database_url: &str) -> Result<PgPool> {
+    Ok(PgPoolOptions::new().connect(database_url).await?)
+}
+
+struct DeviceRow {
+    id: Vec<u8>,
+    r#type: String,
+    name: String,
+    sort_order: i64,
+}
+
+impl TryFrom<DeviceRow> for Device {
+    type Error = anyhow::Error;
+
+    fn try_from(row: DeviceRow) -> Result<Self> {
+        let id_bytes: [u8; 6] = row
+            .id
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow!("invalid MAC address length: {}", v.len()))?;
+        Ok(Device {
+            id: MacAddr6::from(id_bytes),
+            r#type: row.r#type.parse::<DeviceType>()?,
+            name: row.name,
+            sort_order: row.sort_order as u8,
+        })
+    }
+}
+
+pub async fn get_switchbot_devices(pool: &PgPool) -> Result<Vec<Device>> {
+    let rows = sqlx::query_as!(
+        DeviceRow,
+        r#"
+        SELECT id, type::TEXT as "type!", name, sort_order FROM switchbot_devices ORDER BY sort_order
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to select switchbot_devices")?;
+
+    rows.into_iter()
+        .map(Device::try_from)
+        .collect::<Result<Vec<_>>>()
+}
+
+pub async fn bulk_insert_switchbot_measurements(
+    pool: &PgPool,
+    measurments: &[Measurement],
+) -> Result<()> {
     if measurments.is_empty() {
         return Ok(());
     }
@@ -44,7 +92,7 @@ pub async fn bulk_insert_measurements(pool: &PgPool, measurments: &[Measurement]
     )
     .execute(&mut *tx)
     .await
-    .context("failed to execute bulk insert query")?;
+    .context("failed to bulk insert to switchbot_measurements")?;
 
     tx.commit().await.context("failed to commit transaction")?;
 

@@ -1,17 +1,8 @@
-use std::path::PathBuf;
-
 use chrono_tz::Tz;
 use clap::Parser;
-use macaddr::MacAddr6;
 
 #[derive(Debug, Parser)]
 pub struct Args {
-    #[arg(long)]
-    pub device_id: MacAddr6,
-
-    #[arg(long)]
-    pub file: PathBuf,
-
     #[arg(long, env = "TZ")]
     pub timezone: Tz,
 
