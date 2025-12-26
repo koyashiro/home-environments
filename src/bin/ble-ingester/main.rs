@@ -1,7 +1,11 @@
 mod args;
 mod ble;
 
-use std::process::ExitCode;
+use std::{
+    collections::{BTreeMap, HashMap},
+    process::ExitCode,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use args::Args;
@@ -9,10 +13,12 @@ use btleplug::{
     api::{Central, Manager as _, Peripheral, ScanFilter},
     platform::Manager,
 };
+use chrono::{DateTime, TimeDelta};
+use chrono_tz::Tz;
 use clap::Parser as _;
 use home_environments::{
     db::{get_switchbot_devices, new_pool},
-    switchbot::Device,
+    switchbot::{Device, Measurement},
 };
 use indexmap::IndexMap;
 use macaddr::MacAddr6;
@@ -63,6 +69,12 @@ async fn run() -> Result<()> {
         .await
         .context("failed to start BLE scan")?;
 
+    type MeasurementMap = BTreeMap<DateTime<Tz>, Measurement>;
+    let db: HashMap<MacAddr6, Arc<Mutex<MeasurementMap>>> = devices
+        .iter()
+        .map(|(id, _)| (*id, Arc::new(Mutex::new(BTreeMap::new()))))
+        .collect();
+
     loop {
         sleep(Duration::from_secs(2)).await;
 
@@ -76,9 +88,6 @@ async fn run() -> Result<()> {
             let peripheral_id = peripheral.id();
 
             let mac_address: MacAddr6 = peripheral.address().into_inner().into();
-            let Some(device) = devices.get(&mac_address) else {
-                continue;
-            };
 
             let maybe_properties = match peripheral.properties().await {
                 Ok(p) => p,
@@ -112,21 +121,25 @@ async fn run() -> Result<()> {
                 }
             };
 
-            println!(
-                "{}    {}    {:4.1}℃    {}    {}    {}",
-                measurement.measured_at,
-                device.id,
-                measurement.temperature_celsius,
-                measurement.humidity_percent,
-                measurement
-                    .co2_ppm
-                    .map(|v| format!("{v}ppm"))
-                    .unwrap_or_else(|| "N/A".to_string()),
-                measurement
-                    .light_level
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "N/A".to_string()),
-            );
+            let Some(measurements) = db.get(&mac_address) else {
+                eprintln!("unknown device: {mac_address}");
+                continue;
+            };
+
+            let Ok(mut l) = measurements.lock() else {
+                eprintln!("failed to acquire lock for device: {mac_address}");
+                continue;
+            };
+
+            if let Some((&last_measured_at, _)) = l.last_key_value()
+                && measurement.measured_at - last_measured_at < TimeDelta::minutes(1)
+            {
+                continue;
+            }
+
+            l.insert(measurement.measured_at, measurement);
+
+            dbg!(&db);
         }
         println!();
     }
