@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use args::Args;
 use btleplug::{
-    api::{Central, Manager as _, Peripheral, ScanFilter},
+    api::{Central, CentralEvent, Manager as _, Peripheral, ScanFilter},
     platform::Manager,
 };
 use chrono::{DateTime, DurationRound, TimeDelta, Timelike, Utc};
@@ -22,7 +22,7 @@ use home_environments::{
 };
 use indexmap::IndexMap;
 use macaddr::MacAddr6;
-use tokio::time::{Duration, sleep};
+use tokio_stream::StreamExt;
 
 use crate::ble::switchbot::{DecodedMeasurement, decode_switchbot_ble_data};
 
@@ -76,87 +76,91 @@ async fn run() -> Result<()> {
         .map(|(id, _)| (*id, Arc::new(Mutex::new(BTreeMap::new()))))
         .collect();
 
-    loop {
-        sleep(Duration::from_secs(2)).await;
+    let mut events = adapter.events().await?;
 
-        let peripherals = adapter
-            .peripherals()
-            .await
-            .context("failed to get BLE peripherals")?;
+    while let Some(event) = events.next().await {
+        let peripheral_id = match &event {
+            CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id.clone(),
+            _ => continue,
+        };
 
-        for peripheral in peripherals.iter() {
-            let peripheral_id = peripheral.id();
-
-            let mac_address: MacAddr6 = peripheral.address().into_inner().into();
-            if !devices.contains_key(&mac_address) {
+        let peripheral = match adapter.peripheral(&peripheral_id).await {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("failed to get peripheral {peripheral_id}: {err:#}");
                 continue;
             }
+        };
 
-            let maybe_properties = match peripheral.properties().await {
-                Ok(p) => p,
-                Err(err) => {
-                    eprintln!(
-                        "failed to get BLE peripheral properties: {peripheral_id} ({mac_address}): {err:#}"
-                    );
-                    continue;
-                }
-            };
+        let mac_address: MacAddr6 = peripheral.address().into_inner().into();
+        if !devices.contains_key(&mac_address) {
+            continue;
+        }
 
-            let Some(properties) = maybe_properties else {
+        let maybe_properties = match peripheral.properties().await {
+            Ok(p) => p,
+            Err(err) => {
                 eprintln!(
-                    "BLE peripheral properties not available: {peripheral_id} ({mac_address})"
+                    "failed to get BLE peripheral properties: {peripheral_id} ({mac_address}): {err:#}"
                 );
                 continue;
-            };
+            }
+        };
 
-            let decoded = match decode_switchbot_ble_data(
-                &properties.manufacturer_data,
-                &properties.service_data,
-            ) {
-                Ok(m) => m,
-                Err(err) => {
-                    eprintln!(
-                        "failed to decode SwitchBot BLE data: {peripheral_id} ({mac_address}): {properties:?} {err:#}"
-                    );
-                    continue;
-                }
-            };
+        let Some(properties) = maybe_properties else {
+            eprintln!("BLE peripheral properties not available: {peripheral_id} ({mac_address})");
+            continue;
+        };
 
-            let measured_at = Utc::now().with_timezone(&args.timezone);
-
-            if (11..=49).contains(&measured_at.second()) {
+        let decoded = match decode_switchbot_ble_data(
+            &properties.manufacturer_data,
+            &properties.service_data,
+        ) {
+            Ok(m) => m,
+            Err(err) => {
+                eprintln!(
+                    "failed to decode SwitchBot BLE data: {peripheral_id} ({mac_address}): {properties:?} {err:#}"
+                );
                 continue;
             }
+        };
 
-            let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
-                eprintln!("failed to round measured_at to 1 minute: {measured_at}");
-                continue;
-            };
+        let measured_at = Utc::now().with_timezone(&args.timezone);
 
-            let Some(measurements) = db.get(&mac_address) else {
-                eprintln!("unknown device: {mac_address}");
-                continue;
-            };
-
-            let Ok(mut l) = measurements.lock() else {
-                eprintln!("failed to acquire lock for device: {mac_address}");
-                continue;
-            };
-
-            if let Some((existing_measured_at, _)) = l.get(&rounded_measured_at) {
-                let existing_diff = (*existing_measured_at - rounded_measured_at)
-                    .num_milliseconds()
-                    .abs();
-                let new_diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
-
-                if new_diff >= existing_diff {
-                    continue;
-                }
-            }
-
-            l.insert(rounded_measured_at, (measured_at, decoded));
-
-            dbg!(&l);
+        if (11..=49).contains(&measured_at.second()) {
+            continue;
         }
+
+        let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
+            eprintln!("failed to round measured_at to 1 minute: {measured_at}");
+            continue;
+        };
+
+        let Some(measurements) = db.get(&mac_address) else {
+            eprintln!("unknown device: {mac_address}");
+            continue;
+        };
+
+        let Ok(mut l) = measurements.lock() else {
+            eprintln!("failed to acquire lock for device: {mac_address}");
+            continue;
+        };
+
+        if let Some((existing_measured_at, _)) = l.get(&rounded_measured_at) {
+            let existing_diff = (*existing_measured_at - rounded_measured_at)
+                .num_milliseconds()
+                .abs();
+            let new_diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
+
+            if new_diff >= existing_diff {
+                continue;
+            }
+        }
+
+        l.insert(rounded_measured_at, (measured_at, decoded));
+
+        dbg!(&l);
     }
+
+    Ok(())
 }

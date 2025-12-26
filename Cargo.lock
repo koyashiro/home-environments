@@ -771,6 +771,7 @@ dependencies = [
  "macaddr",
  "sqlx",
  "tokio",
+ "tokio-stream",
  "uuid",
 ]
 
