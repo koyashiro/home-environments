@@ -13,18 +13,18 @@ use btleplug::{
     api::{Central, Manager as _, Peripheral, ScanFilter},
     platform::Manager,
 };
-use chrono::{DateTime, TimeDelta};
+use chrono::{DateTime, DurationRound, TimeDelta, Timelike, Utc};
 use chrono_tz::Tz;
 use clap::Parser as _;
 use home_environments::{
     db::{get_switchbot_devices, new_pool},
-    switchbot::{Device, Measurement},
+    switchbot::Device,
 };
 use indexmap::IndexMap;
 use macaddr::MacAddr6;
 use tokio::time::{Duration, sleep};
 
-use crate::ble::switchbot::decode_switchbot_ble_data;
+use crate::ble::switchbot::{DecodedMeasurement, decode_switchbot_ble_data};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -69,7 +69,8 @@ async fn run() -> Result<()> {
         .await
         .context("failed to start BLE scan")?;
 
-    type MeasurementMap = BTreeMap<DateTime<Tz>, Measurement>;
+    type MeasurementEntry = (DateTime<Tz>, DecodedMeasurement);
+    type MeasurementMap = BTreeMap<DateTime<Tz>, MeasurementEntry>;
     let db: HashMap<MacAddr6, Arc<Mutex<MeasurementMap>>> = devices
         .iter()
         .map(|(id, _)| (*id, Arc::new(Mutex::new(BTreeMap::new()))))
@@ -83,11 +84,13 @@ async fn run() -> Result<()> {
             .await
             .context("failed to get BLE peripherals")?;
 
-        println!();
         for peripheral in peripherals.iter() {
             let peripheral_id = peripheral.id();
 
             let mac_address: MacAddr6 = peripheral.address().into_inner().into();
+            if !devices.contains_key(&mac_address) {
+                continue;
+            }
 
             let maybe_properties = match peripheral.properties().await {
                 Ok(p) => p,
@@ -106,11 +109,9 @@ async fn run() -> Result<()> {
                 continue;
             };
 
-            let measurement = match decode_switchbot_ble_data(
-                mac_address,
+            let decoded = match decode_switchbot_ble_data(
                 &properties.manufacturer_data,
                 &properties.service_data,
-                args.timezone,
             ) {
                 Ok(m) => m,
                 Err(err) => {
@@ -119,6 +120,17 @@ async fn run() -> Result<()> {
                     );
                     continue;
                 }
+            };
+
+            let measured_at = Utc::now().with_timezone(&args.timezone);
+
+            if (11..=49).contains(&measured_at.second()) {
+                continue;
+            }
+
+            let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
+                eprintln!("failed to round measured_at to 1 minute: {measured_at}");
+                continue;
             };
 
             let Some(measurements) = db.get(&mac_address) else {
@@ -131,16 +143,20 @@ async fn run() -> Result<()> {
                 continue;
             };
 
-            if let Some((&last_measured_at, _)) = l.last_key_value()
-                && measurement.measured_at - last_measured_at < TimeDelta::minutes(1)
-            {
-                continue;
+            if let Some((existing_measured_at, _)) = l.get(&rounded_measured_at) {
+                let existing_diff = (*existing_measured_at - rounded_measured_at)
+                    .num_milliseconds()
+                    .abs();
+                let new_diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
+
+                if new_diff >= existing_diff {
+                    continue;
+                }
             }
 
-            l.insert(measurement.measured_at, measurement);
+            l.insert(rounded_measured_at, (measured_at, decoded));
 
-            dbg!(&db);
+            dbg!(&l);
         }
-        println!();
     }
 }

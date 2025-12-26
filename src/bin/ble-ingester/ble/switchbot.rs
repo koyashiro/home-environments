@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use chrono::Utc;
-use chrono_tz::Tz;
-use home_environments::switchbot::{DeviceType, Measurement};
-use macaddr::MacAddr6;
+use home_environments::switchbot::DeviceType;
 use uuid::{Uuid, uuid};
+
+#[derive(Debug)]
+pub struct DecodedMeasurement {
+    pub temperature_celsius: f32,
+    pub humidity_percent: u8,
+    pub co2_ppm: Option<u16>,
+    pub light_level: Option<u8>,
+}
 
 // Ref: https://github.com/OpenWonderLabs/SwitchBotAPI-BLE/blob/2bd727ecf7c0898b25ac2df58a4886b5930c9138/README.md?plain=1#L44
 const SWITCHBOT_MANUFACTURER_DATA_COMPANY_ID: u16 = 0x0969;
@@ -14,11 +19,9 @@ const SWITCHBOT_MANUFACTURER_DATA_COMPANY_ID: u16 = 0x0969;
 const SWITCHBOT_SERVICE_DATA_UUID: Uuid = uuid!("0000fd3d-0000-1000-8000-00805f9b34fb");
 
 pub fn decode_switchbot_ble_data(
-    mac_address: MacAddr6,
     manufacturer_data: &HashMap<u16, Vec<u8>>,
     service_data: &HashMap<Uuid, Vec<u8>>,
-    tz: Tz,
-) -> Result<Measurement> {
+) -> Result<DecodedMeasurement> {
     let switchbot_service_data = get_switch_bot_service_data(service_data)
         .context("failed to get SwitchBot service data")?;
 
@@ -29,58 +32,32 @@ pub fn decode_switchbot_ble_data(
         .context("failed to get SwitchBot manufacturer data")?;
 
     (match device_type {
-        DeviceType::Hub => {
-            decode_hub_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
-        DeviceType::HubMini => {
-            decode_hub_mini_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
-        DeviceType::Hub2 => {
-            decode_hub2_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
-        DeviceType::Hub3 => {
-            decode_hub3_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
-        DeviceType::Meter => {
-            decode_meter_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
-        DeviceType::MeterPlus => {
-            decode_meter_plus_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
+        DeviceType::Hub => decode_hub_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::HubMini => decode_hub_mini_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::Hub2 => decode_hub2_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::Hub3 => decode_hub3_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::Meter => decode_meter_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::MeterPlus => decode_meter_plus_manufacturer_data(switchbot_manufacturer_data),
         DeviceType::WoIOSensor => {
-            decode_wo_io_sensor_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
+            decode_wo_io_sensor_manufacturer_data(switchbot_manufacturer_data)
         }
-        DeviceType::MeterPro => {
-            decode_meter_pro_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
-        }
+        DeviceType::MeterPro => decode_meter_pro_manufacturer_data(switchbot_manufacturer_data),
         DeviceType::MeterProCO2 => {
-            decode_meter_pro_co2_manufacturer_data(mac_address, switchbot_manufacturer_data, tz)
+            decode_meter_pro_co2_manufacturer_data(switchbot_manufacturer_data)
         }
     })
-    .context("failed to decode SwitchBot manufacturer data: {peripheral_id} ({mac_address})")
+    .context("failed to decode SwitchBot manufacturer data")
 }
 
-pub fn decode_hub_manufacturer_data(
-    _mac_address: MacAddr6,
-    _manufacturer_data: &[u8],
-    _tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_hub_manufacturer_data(_manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     bail!("todo")
 }
 
-pub fn decode_hub_mini_manufacturer_data(
-    _mac_address: MacAddr6,
-    _manufacturer_data: &[u8],
-    _tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_hub_mini_manufacturer_data(_manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     bail!("todo")
 }
 
-pub fn decode_hub2_manufacturer_data(
-    mac_address: MacAddr6,
-    manufacturer_data: &[u8],
-    tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_hub2_manufacturer_data(manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     if manufacturer_data.len() < 17 {
         bail!(
             "Hub2 manufacturer data too short: expected at least 17 bytes, got {}",
@@ -96,9 +73,7 @@ pub fn decode_hub2_manufacturer_data(
     let light_level =
         Some(decode_light_level(manufacturer_data[12]).context("failed to decode light level")?);
 
-    Ok(Measurement {
-        device_id: mac_address,
-        measured_at: Utc::now().with_timezone(&tz),
+    Ok(DecodedMeasurement {
         temperature_celsius,
         humidity_percent,
         co2_ppm,
@@ -106,27 +81,15 @@ pub fn decode_hub2_manufacturer_data(
     })
 }
 
-pub fn decode_hub3_manufacturer_data(
-    _mac_address: MacAddr6,
-    _manufacturer_data: &[u8],
-    _tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_hub3_manufacturer_data(_manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     bail!("todo")
 }
 
-pub fn decode_meter_manufacturer_data(
-    _mac_address: MacAddr6,
-    _manufacturer_data: &[u8],
-    _tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_meter_manufacturer_data(_manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     bail!("todo")
 }
 
-pub fn decode_meter_plus_manufacturer_data(
-    mac_address: MacAddr6,
-    manufacturer_data: &[u8],
-    tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_meter_plus_manufacturer_data(manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     if manufacturer_data.len() < 11 {
         bail!(
             "Meter Plus manufacturer data too short: expected at least 11 bytes, got {}",
@@ -141,9 +104,7 @@ pub fn decode_meter_plus_manufacturer_data(
     let co2_ppm = None;
     let light_level = None;
 
-    Ok(Measurement {
-        device_id: mac_address,
-        measured_at: Utc::now().with_timezone(&tz),
+    Ok(DecodedMeasurement {
         temperature_celsius,
         humidity_percent,
         co2_ppm,
@@ -152,10 +113,8 @@ pub fn decode_meter_plus_manufacturer_data(
 }
 
 pub fn decode_wo_io_sensor_manufacturer_data(
-    mac_address: MacAddr6,
     manufacturer_data: &[u8],
-    tz: Tz,
-) -> Result<Measurement> {
+) -> Result<DecodedMeasurement> {
     if manufacturer_data.len() < 12 {
         bail!(
             "WoIOSensor manufacturer data too short: expected at least 12 bytes, got {}",
@@ -170,9 +129,7 @@ pub fn decode_wo_io_sensor_manufacturer_data(
     let co2_ppm = None;
     let light_level = None;
 
-    Ok(Measurement {
-        device_id: mac_address,
-        measured_at: Utc::now().with_timezone(&tz),
+    Ok(DecodedMeasurement {
         temperature_celsius,
         humidity_percent,
         co2_ppm,
@@ -180,19 +137,13 @@ pub fn decode_wo_io_sensor_manufacturer_data(
     })
 }
 
-pub fn decode_meter_pro_manufacturer_data(
-    _mac_address: MacAddr6,
-    _manufacturer_data: &[u8],
-    _tz: Tz,
-) -> Result<Measurement> {
+pub fn decode_meter_pro_manufacturer_data(_manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
     bail!("todo")
 }
 
 pub fn decode_meter_pro_co2_manufacturer_data(
-    mac_address: MacAddr6,
     manufacturer_data: &[u8],
-    tz: Tz,
-) -> Result<Measurement> {
+) -> Result<DecodedMeasurement> {
     if manufacturer_data.len() < 16 {
         bail!(
             "Meter Pro CO2 manufacturer data too short: expected at least 16 bytes, got {}",
@@ -210,9 +161,7 @@ pub fn decode_meter_pro_co2_manufacturer_data(
     );
     let light_level = None;
 
-    Ok(Measurement {
-        device_id: mac_address,
-        measured_at: Utc::now().with_timezone(&tz),
+    Ok(DecodedMeasurement {
         temperature_celsius,
         humidity_percent,
         co2_ppm,
