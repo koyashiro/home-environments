@@ -24,7 +24,7 @@ use indexmap::IndexMap;
 use macaddr::MacAddr6;
 use tokio_stream::StreamExt;
 
-use crate::ble::switchbot::{DecodedMeasurement, decode_ble_data};
+use crate::ble::switchbot::{DecodedMeasurement, decode_ble_data, decode_manufacturer_data};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -105,9 +105,9 @@ async fn run() -> Result<()> {
         }
 
         let mac_address: MacAddr6 = peripheral.address().into_inner().into();
-        if !devices.contains_key(&mac_address) {
+        let Some(device) = devices.get(&mac_address) else {
             continue;
-        }
+        };
 
         let maybe_properties = match peripheral.properties().await {
             Ok(p) => p,
@@ -125,11 +125,15 @@ async fn run() -> Result<()> {
         };
 
         let decoded = match decode_ble_data(&properties.manufacturer_data, &properties.service_data)
+            .inspect_err(|err| {
+                eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
+            })
+            .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
         {
             Ok(m) => m,
             Err(err) => {
                 eprintln!(
-                    "failed to decode SwitchBot BLE data: {peripheral_id} ({mac_address}): {properties:?} {err:#}"
+                    "failed to decode manufacturer data: {peripheral_id} ({mac_address}): {err:#}"
                 );
                 continue;
             }
@@ -149,9 +153,8 @@ async fn run() -> Result<()> {
             let existing_diff = (*existing_measured_at - rounded_measured_at)
                 .num_milliseconds()
                 .abs();
-            let new_diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
 
-            if new_diff >= existing_diff {
+            if diff >= existing_diff {
                 continue;
             }
         }

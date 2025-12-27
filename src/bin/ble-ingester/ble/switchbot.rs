@@ -28,27 +28,31 @@ pub fn decode_ble_data(
     let device_type = detect_device_type(switchbot_service_data)
         .context("failed to detect SwitchBot device type")?;
 
-    let switchbot_manufacturer_data = get_switch_bot_manufacturer_data(manufacturer_data)
-        .context("failed to get SwitchBot manufacturer data")?;
-
-    decode_manufacturer_data(&device_type, switchbot_manufacturer_data)
+    decode_manufacturer_data(&device_type, manufacturer_data)
         .context("failed to decode SwitchBot manufacturer data")
 }
 
 pub fn decode_manufacturer_data(
     device_type: &DeviceType,
-    manufacturer_data: &[u8],
+    manufacturer_data: &HashMap<u16, Vec<u8>>,
 ) -> Result<DecodedMeasurement> {
+    let switchbot_manufacturer_data = get_switch_bot_manufacturer_data(manufacturer_data)
+        .context("failed to get SwitchBot manufacturer data")?;
+
     match device_type {
-        DeviceType::Hub => decode_hub_manufacturer_data(manufacturer_data),
-        DeviceType::HubMini => decode_hub_mini_manufacturer_data(manufacturer_data),
-        DeviceType::Hub2 => decode_hub2_manufacturer_data(manufacturer_data),
-        DeviceType::Hub3 => decode_hub3_manufacturer_data(manufacturer_data),
-        DeviceType::Meter => decode_meter_manufacturer_data(manufacturer_data),
-        DeviceType::MeterPlus => decode_meter_plus_manufacturer_data(manufacturer_data),
-        DeviceType::WoIOSensor => decode_wo_io_sensor_manufacturer_data(manufacturer_data),
-        DeviceType::MeterPro => decode_meter_pro_manufacturer_data(manufacturer_data),
-        DeviceType::MeterProCO2 => decode_meter_pro_co2_manufacturer_data(manufacturer_data),
+        DeviceType::Hub => decode_hub_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::HubMini => decode_hub_mini_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::Hub2 => decode_hub2_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::Hub3 => decode_hub3_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::Meter => decode_meter_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::MeterPlus => decode_meter_plus_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::WoIOSensor => {
+            decode_wo_io_sensor_manufacturer_data(switchbot_manufacturer_data)
+        }
+        DeviceType::MeterPro => decode_meter_pro_manufacturer_data(switchbot_manufacturer_data),
+        DeviceType::MeterProCO2 => {
+            decode_meter_pro_co2_manufacturer_data(switchbot_manufacturer_data)
+        }
     }
 }
 
