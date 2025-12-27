@@ -70,16 +70,10 @@ async fn run() -> Result<()> {
         .await
         .context("failed to start BLE scan")?;
 
-    type MeasurementEntry = (DateTime<Tz>, DecodedMeasurement);
-    type MeasurementMap = BTreeMap<DateTime<Tz>, MeasurementEntry>;
-    let db: Arc<HashMap<MacAddr6, Arc<Mutex<MeasurementMap>>>> = Arc::new(
-        devices
-            .iter()
-            .map(|(id, _)| (*id, Arc::new(Mutex::new(BTreeMap::new()))))
-            .collect(),
-    );
-
-    let db = db.clone();
+    type Db = HashMap<MacAddr6, BTreeMap<DateTime<Tz>, (DateTime<Tz>, DecodedMeasurement)>>;
+    let db: Arc<Mutex<Db>> = Arc::new(Mutex::new(
+        devices.keys().map(|id| (*id, BTreeMap::new())).collect(),
+    ));
 
     let mut events = adapter.events().await?;
 
@@ -148,17 +142,17 @@ async fn run() -> Result<()> {
                 }
             };
 
-            let Some(measurements) = db_for_ingester.get(&mac_address) else {
+            let Ok(mut db) = db_for_ingester.lock() else {
+                eprintln!("failed to acquire lock");
+                continue;
+            };
+
+            let Some(measurements) = db.get_mut(&mac_address) else {
                 eprintln!("unknown device: {mac_address}");
                 continue;
             };
 
-            let Ok(mut l) = measurements.lock() else {
-                eprintln!("failed to acquire lock for device: {mac_address}");
-                continue;
-            };
-
-            if let Some((existing_measured_at, _)) = l.get(&rounded_measured_at) {
+            if let Some((existing_measured_at, _)) = measurements.get(&rounded_measured_at) {
                 let existing_diff = (*existing_measured_at - rounded_measured_at)
                     .num_milliseconds()
                     .abs();
@@ -168,7 +162,7 @@ async fn run() -> Result<()> {
                 }
             }
 
-            l.insert(rounded_measured_at, (measured_at, decoded));
+            measurements.insert(rounded_measured_at, (measured_at, decoded));
         }
     });
 
@@ -177,14 +171,13 @@ async fn run() -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
-            for (mac_address, measurements) in db_for_printer.iter() {
-                let Ok(l) = measurements.lock() else {
-                    eprintln!("failed to acquire lock for device: {mac_address}");
-                    break;
-                };
+            let Ok(db) = db_for_printer.lock() else {
+                eprintln!("failed to acquire lock");
+                continue;
+            };
 
-                let ms: Vec<&(DateTime<Tz>, DecodedMeasurement)> = l.values().collect();
-
+            for (mac_address, measurements) in db.iter() {
+                let ms: Vec<&(DateTime<Tz>, DecodedMeasurement)> = measurements.values().collect();
                 println!("{mac_address}: {ms:#?}");
             }
         }
