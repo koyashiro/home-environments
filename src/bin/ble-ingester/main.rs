@@ -80,11 +80,11 @@ async fn run() -> Result<()> {
 
     while let Some(event) = events.next().await {
         let peripheral_id = match &event {
-            CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id.clone(),
+            CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id,
             _ => continue,
         };
 
-        let peripheral = match adapter.peripheral(&peripheral_id).await {
+        let peripheral = match adapter.peripheral(peripheral_id).await {
             Ok(p) => p,
             Err(err) => {
                 eprintln!("failed to get peripheral {peripheral_id}: {err:#}");
