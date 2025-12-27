@@ -13,7 +13,7 @@ use btleplug::{
     api::{Central, CentralEvent, Manager as _, Peripheral, ScanFilter},
     platform::Manager,
 };
-use chrono::{DateTime, DurationRound, TimeDelta, Timelike, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use chrono_tz::Tz;
 use clap::Parser as _;
 use home_environments::{
@@ -24,7 +24,7 @@ use indexmap::IndexMap;
 use macaddr::MacAddr6;
 use tokio_stream::StreamExt;
 
-use crate::ble::switchbot::{DecodedMeasurement, decode_switchbot_ble_data};
+use crate::ble::switchbot::{DecodedMeasurement, decode_ble_data};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -92,6 +92,18 @@ async fn run() -> Result<()> {
             }
         };
 
+        let measured_at = Utc::now().with_timezone(&args.timezone);
+
+        let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
+            eprintln!("failed to round measured_at to 1 minute: {measured_at}");
+            continue;
+        };
+
+        let diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
+        if diff > TimeDelta::seconds(20).num_milliseconds() {
+            continue;
+        }
+
         let mac_address: MacAddr6 = peripheral.address().into_inner().into();
         if !devices.contains_key(&mac_address) {
             continue;
@@ -112,10 +124,8 @@ async fn run() -> Result<()> {
             continue;
         };
 
-        let decoded = match decode_switchbot_ble_data(
-            &properties.manufacturer_data,
-            &properties.service_data,
-        ) {
+        let decoded = match decode_ble_data(&properties.manufacturer_data, &properties.service_data)
+        {
             Ok(m) => m,
             Err(err) => {
                 eprintln!(
@@ -123,17 +133,6 @@ async fn run() -> Result<()> {
                 );
                 continue;
             }
-        };
-
-        let measured_at = Utc::now().with_timezone(&args.timezone);
-
-        if (11..=49).contains(&measured_at.second()) {
-            continue;
-        }
-
-        let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
-            eprintln!("failed to round measured_at to 1 minute: {measured_at}");
-            continue;
         };
 
         let Some(measurements) = db.get(&mac_address) else {

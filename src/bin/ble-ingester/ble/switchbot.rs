@@ -18,7 +18,7 @@ const SWITCHBOT_MANUFACTURER_DATA_COMPANY_ID: u16 = 0x0969;
 // Ref: https://github.com/OpenWonderLabs/SwitchBotAPI-BLE/blob/2bd727ecf7c0898b25ac2df58a4886b5930c9138/README.md?plain=1#L45
 const SWITCHBOT_SERVICE_DATA_UUID: Uuid = uuid!("0000fd3d-0000-1000-8000-00805f9b34fb");
 
-pub fn decode_switchbot_ble_data(
+pub fn decode_ble_data(
     manufacturer_data: &HashMap<u16, Vec<u8>>,
     service_data: &HashMap<Uuid, Vec<u8>>,
 ) -> Result<DecodedMeasurement> {
@@ -31,22 +31,25 @@ pub fn decode_switchbot_ble_data(
     let switchbot_manufacturer_data = get_switch_bot_manufacturer_data(manufacturer_data)
         .context("failed to get SwitchBot manufacturer data")?;
 
-    (match device_type {
-        DeviceType::Hub => decode_hub_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::HubMini => decode_hub_mini_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::Hub2 => decode_hub2_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::Hub3 => decode_hub3_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::Meter => decode_meter_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::MeterPlus => decode_meter_plus_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::WoIOSensor => {
-            decode_wo_io_sensor_manufacturer_data(switchbot_manufacturer_data)
-        }
-        DeviceType::MeterPro => decode_meter_pro_manufacturer_data(switchbot_manufacturer_data),
-        DeviceType::MeterProCO2 => {
-            decode_meter_pro_co2_manufacturer_data(switchbot_manufacturer_data)
-        }
-    })
-    .context("failed to decode SwitchBot manufacturer data")
+    decode_manufacturer_data(&device_type, switchbot_manufacturer_data)
+        .context("failed to decode SwitchBot manufacturer data")
+}
+
+pub fn decode_manufacturer_data(
+    device_type: &DeviceType,
+    manufacturer_data: &[u8],
+) -> Result<DecodedMeasurement> {
+    match device_type {
+        DeviceType::Hub => decode_hub_manufacturer_data(manufacturer_data),
+        DeviceType::HubMini => decode_hub_mini_manufacturer_data(manufacturer_data),
+        DeviceType::Hub2 => decode_hub2_manufacturer_data(manufacturer_data),
+        DeviceType::Hub3 => decode_hub3_manufacturer_data(manufacturer_data),
+        DeviceType::Meter => decode_meter_manufacturer_data(manufacturer_data),
+        DeviceType::MeterPlus => decode_meter_plus_manufacturer_data(manufacturer_data),
+        DeviceType::WoIOSensor => decode_wo_io_sensor_manufacturer_data(manufacturer_data),
+        DeviceType::MeterPro => decode_meter_pro_manufacturer_data(manufacturer_data),
+        DeviceType::MeterProCO2 => decode_meter_pro_co2_manufacturer_data(manufacturer_data),
+    }
 }
 
 pub fn decode_hub_manufacturer_data(_manufacturer_data: &[u8]) -> Result<DecodedMeasurement> {
