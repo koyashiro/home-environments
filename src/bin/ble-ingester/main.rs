@@ -130,11 +130,14 @@ async fn run() -> Result<()> {
                 continue;
             };
 
-            let decoded = match decode_ble_data(&properties.manufacturer_data, &properties.service_data)
-                .inspect_err(|err| {
-                    eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
-                })
-                .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
+            let decoded = match decode_ble_data(
+                &properties.manufacturer_data,
+                &properties.service_data,
+            )
+            .inspect_err(|_e| {
+                // eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
+            })
+            .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
             {
                 Ok(m) => m,
                 Err(err) => {
@@ -168,7 +171,7 @@ async fn run() -> Result<()> {
 
     let db_for_printer = db.clone();
     let printer_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_mins(5));
+        let mut interval = tokio::time::interval(Duration::from_mins(1));
         loop {
             interval.tick().await;
             let mut db = db_for_printer.lock().await;
@@ -181,8 +184,8 @@ async fn run() -> Result<()> {
                     measurements
                         .iter()
                         .filter(|&(&measured_at, _)| {
-                            (measured_at - now).num_milliseconds()
-                                > TimeDelta::seconds(30).num_milliseconds()
+                            (now - measured_at).num_milliseconds()
+                                > TimeDelta::seconds(40).num_milliseconds()
                         })
                         .map(move |(&measured_at, _)| (device_id, measured_at))
                 })
@@ -204,10 +207,12 @@ async fn run() -> Result<()> {
                 })
                 .collect();
 
+            println!("Inserting {} measurements...", measurments.len());
             if let Err(e) = bulk_insert_switchbot_measurements(&pool, &measurments).await {
                 eprintln!("failed to bulk insert measurements: {e:#}");
                 continue;
             }
+            println!("Inserted {} measurements.", measurments.len());
 
             for (device_id, measured_at) in keys_to_insert {
                 if let Some(measurements) = db.get_mut(&device_id) {
