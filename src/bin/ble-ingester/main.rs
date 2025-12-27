@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     process::ExitCode,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -71,98 +72,125 @@ async fn run() -> Result<()> {
 
     type MeasurementEntry = (DateTime<Tz>, DecodedMeasurement);
     type MeasurementMap = BTreeMap<DateTime<Tz>, MeasurementEntry>;
-    let db: HashMap<MacAddr6, Arc<Mutex<MeasurementMap>>> = devices
-        .iter()
-        .map(|(id, _)| (*id, Arc::new(Mutex::new(BTreeMap::new()))))
-        .collect();
+    let db: Arc<HashMap<MacAddr6, Arc<Mutex<MeasurementMap>>>> = Arc::new(
+        devices
+            .iter()
+            .map(|(id, _)| (*id, Arc::new(Mutex::new(BTreeMap::new()))))
+            .collect(),
+    );
+
+    let db = db.clone();
 
     let mut events = adapter.events().await?;
 
-    while let Some(event) = events.next().await {
-        let peripheral_id = match &event {
-            CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id,
-            _ => continue,
-        };
+    let db_for_ingester = db.clone();
+    let ingester_handle = tokio::spawn(async move {
+        while let Some(event) = events.next().await {
+            let peripheral_id = match &event {
+                CentralEvent::DeviceDiscovered(id) | CentralEvent::DeviceUpdated(id) => id,
+                _ => continue,
+            };
 
-        let peripheral = match adapter.peripheral(peripheral_id).await {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("failed to get peripheral {peripheral_id}: {err:#}");
+            let peripheral = match adapter.peripheral(peripheral_id).await {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("failed to get peripheral {peripheral_id}: {err:#}");
+                    continue;
+                }
+            };
+
+            let measured_at = Utc::now().with_timezone(&args.timezone);
+
+            let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
+                eprintln!("failed to round measured_at to 1 minute: {measured_at}");
+                continue;
+            };
+
+            let diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
+            if diff > TimeDelta::seconds(20).num_milliseconds() {
                 continue;
             }
-        };
 
-        let measured_at = Utc::now().with_timezone(&args.timezone);
+            let mac_address: MacAddr6 = peripheral.address().into_inner().into();
+            let Some(device) = devices.get(&mac_address) else {
+                continue;
+            };
 
-        let Ok(rounded_measured_at) = measured_at.duration_round(TimeDelta::minutes(1)) else {
-            eprintln!("failed to round measured_at to 1 minute: {measured_at}");
-            continue;
-        };
+            let maybe_properties = match peripheral.properties().await {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!(
+                        "failed to get BLE peripheral properties: {peripheral_id} ({mac_address}): {err:#}"
+                    );
+                    continue;
+                }
+            };
 
-        let diff = (measured_at - rounded_measured_at).num_milliseconds().abs();
-        if diff > TimeDelta::seconds(20).num_milliseconds() {
-            continue;
-        }
-
-        let mac_address: MacAddr6 = peripheral.address().into_inner().into();
-        let Some(device) = devices.get(&mac_address) else {
-            continue;
-        };
-
-        let maybe_properties = match peripheral.properties().await {
-            Ok(p) => p,
-            Err(err) => {
+            let Some(properties) = maybe_properties else {
                 eprintln!(
-                    "failed to get BLE peripheral properties: {peripheral_id} ({mac_address}): {err:#}"
+                    "BLE peripheral properties not available: {peripheral_id} ({mac_address})"
                 );
                 continue;
-            }
-        };
+            };
 
-        let Some(properties) = maybe_properties else {
-            eprintln!("BLE peripheral properties not available: {peripheral_id} ({mac_address})");
-            continue;
-        };
+            let decoded = match decode_ble_data(&properties.manufacturer_data, &properties.service_data)
+                .inspect_err(|err| {
+                    eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
+                })
+                .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
+            {
+                Ok(m) => m,
+                Err(err) => {
+                    eprintln!(
+                        "failed to decode manufacturer data: {peripheral_id} ({mac_address}): {err:#}"
+                    );
+                    continue;
+                }
+            };
 
-        let decoded = match decode_ble_data(&properties.manufacturer_data, &properties.service_data)
-            .inspect_err(|err| {
-                eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
-            })
-            .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
-        {
-            Ok(m) => m,
-            Err(err) => {
-                eprintln!(
-                    "failed to decode manufacturer data: {peripheral_id} ({mac_address}): {err:#}"
-                );
+            let Some(measurements) = db_for_ingester.get(&mac_address) else {
+                eprintln!("unknown device: {mac_address}");
                 continue;
-            }
-        };
+            };
 
-        let Some(measurements) = db.get(&mac_address) else {
-            eprintln!("unknown device: {mac_address}");
-            continue;
-        };
-
-        let Ok(mut l) = measurements.lock() else {
-            eprintln!("failed to acquire lock for device: {mac_address}");
-            continue;
-        };
-
-        if let Some((existing_measured_at, _)) = l.get(&rounded_measured_at) {
-            let existing_diff = (*existing_measured_at - rounded_measured_at)
-                .num_milliseconds()
-                .abs();
-
-            if diff >= existing_diff {
+            let Ok(mut l) = measurements.lock() else {
+                eprintln!("failed to acquire lock for device: {mac_address}");
                 continue;
+            };
+
+            if let Some((existing_measured_at, _)) = l.get(&rounded_measured_at) {
+                let existing_diff = (*existing_measured_at - rounded_measured_at)
+                    .num_milliseconds()
+                    .abs();
+
+                if diff >= existing_diff {
+                    continue;
+                }
+            }
+
+            l.insert(rounded_measured_at, (measured_at, decoded));
+        }
+    });
+
+    let db_for_printer = db.clone();
+    let printer_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            for (mac_address, measurements) in db_for_printer.iter() {
+                let Ok(l) = measurements.lock() else {
+                    eprintln!("failed to acquire lock for device: {mac_address}");
+                    break;
+                };
+
+                let ms: Vec<&(DateTime<Tz>, DecodedMeasurement)> = l.values().collect();
+
+                println!("{mac_address}: {ms:#?}");
             }
         }
+    });
 
-        l.insert(rounded_measured_at, (measured_at, decoded));
-
-        dbg!(&l);
-    }
+    let _ = tokio::join!(ingester_handle, printer_handle);
 
     Ok(())
 }
