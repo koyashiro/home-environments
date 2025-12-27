@@ -4,7 +4,7 @@ mod ble;
 use std::{
     collections::{BTreeMap, HashMap},
     process::ExitCode,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -19,11 +19,14 @@ use chrono_tz::Tz;
 use clap::Parser as _;
 use home_environments::{
     db::{get_switchbot_devices, new_pool},
-    switchbot::Device,
+    switchbot::{Device, Measurement},
 };
 use indexmap::IndexMap;
 use macaddr::MacAddr6;
+use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
+
+use home_environments::db::bulk_insert_switchbot_measurements;
 
 use crate::ble::switchbot::{DecodedMeasurement, decode_ble_data, decode_manufacturer_data};
 
@@ -127,11 +130,14 @@ async fn run() -> Result<()> {
                 continue;
             };
 
-            let decoded = match decode_ble_data(&properties.manufacturer_data, &properties.service_data)
-                .inspect_err(|err| {
-                    eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
-                })
-                .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
+            let decoded = match decode_ble_data(
+                &properties.manufacturer_data,
+                &properties.service_data,
+            )
+            .inspect_err(|_e| {
+                // eprintln!("failed to decode BLE service data, falling back to manufacturer data: {peripheral_id} ({mac_address}) {err:#}");
+            })
+            .or_else(|_| decode_manufacturer_data(&device.r#type, &properties.manufacturer_data))
             {
                 Ok(m) => m,
                 Err(err) => {
@@ -142,10 +148,7 @@ async fn run() -> Result<()> {
                 }
             };
 
-            let Ok(mut db) = db_for_ingester.lock() else {
-                eprintln!("failed to acquire lock");
-                continue;
-            };
+            let mut db = db_for_ingester.lock().await;
 
             let Some(measurements) = db.get_mut(&mac_address) else {
                 eprintln!("unknown device: {mac_address}");
@@ -168,17 +171,53 @@ async fn run() -> Result<()> {
 
     let db_for_printer = db.clone();
     let printer_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        let mut interval = tokio::time::interval(Duration::from_mins(1));
         loop {
             interval.tick().await;
-            let Ok(db) = db_for_printer.lock() else {
-                eprintln!("failed to acquire lock");
-                continue;
-            };
+            let mut db = db_for_printer.lock().await;
 
-            for (mac_address, measurements) in db.iter() {
-                let ms: Vec<&(DateTime<Tz>, DecodedMeasurement)> = measurements.values().collect();
-                println!("{mac_address}: {ms:#?}");
+            let now = Utc::now().with_timezone(&args.timezone);
+
+            let keys_to_insert: Vec<(MacAddr6, DateTime<Tz>)> = db
+                .iter()
+                .flat_map(|(&device_id, measurements)| {
+                    measurements
+                        .iter()
+                        .filter(|&(&measured_at, _)| {
+                            (now - measured_at).num_milliseconds()
+                                > TimeDelta::seconds(40).num_milliseconds()
+                        })
+                        .map(move |(&measured_at, _)| (device_id, measured_at))
+                })
+                .collect();
+
+            let measurments: Vec<Measurement> = keys_to_insert
+                .iter()
+                .filter_map(|(device_id, measured_at)| {
+                    db.get(device_id)
+                        .and_then(|m| m.get(measured_at))
+                        .map(|(_, m)| Measurement {
+                            device_id: *device_id,
+                            measured_at: *measured_at,
+                            temperature_celsius: m.temperature_celsius,
+                            humidity_percent: m.humidity_percent,
+                            co2_ppm: m.co2_ppm,
+                            light_level: m.light_level,
+                        })
+                })
+                .collect();
+
+            println!("Inserting {} measurements...", measurments.len());
+            if let Err(e) = bulk_insert_switchbot_measurements(&pool, &measurments).await {
+                eprintln!("failed to bulk insert measurements: {e:#}");
+                continue;
+            }
+            println!("Inserted {} measurements.", measurments.len());
+
+            for (device_id, measured_at) in keys_to_insert {
+                if let Some(measurements) = db.get_mut(&device_id) {
+                    measurements.remove(&measured_at);
+                }
             }
         }
     });
