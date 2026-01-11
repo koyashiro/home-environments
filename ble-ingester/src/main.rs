@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::{Timelike, Utc};
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 use tracing_subscriber::{EnvFilter, fmt::time::ChronoLocal};
 
 #[tokio::main]
@@ -29,9 +29,9 @@ async fn ble_receiver() {
 
         // Write data to in-memory database during hh:mm:50 to hh:mm:10 window
         if 50 <= now_seconds || now_seconds <= 10 {
-            info!("BLE received");
+            debug!("BLE received");
         } else {
-            info!("BLE skipped");
+            debug!("BLE skipped");
         }
 
         tokio::time::sleep(Duration::from_secs(2)).await;
