@@ -8,7 +8,9 @@ use tracing_subscriber::EnvFilter;
 async fn main() {
     tracing_subscriber::fmt()
         .with_target(false)
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     let ble_receiver = tokio::spawn(ble_receiver());
