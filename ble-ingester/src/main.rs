@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::{Timelike, Utc};
 use tracing::{info, instrument};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, fmt::time::ChronoLocal};
 
 #[tokio::main]
 async fn main() {
@@ -11,6 +11,7 @@ async fn main() {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        .with_timer(ChronoLocal::new("%Y-%m-%dT%H:%M:%S%.3f%:z".to_string()))
         .init();
 
     let ble_receiver = tokio::spawn(ble_receiver());
