@@ -15,7 +15,7 @@ pub fn parse_ratoc_systems(
 
 /// RS-BTWATTCH2 manufacturer data format:
 /// - Byte 0: Status (non-zero = relay on, zero = relay off)
-/// - Byte 1-2: Voltage in 1dV (0.1V) units (little endian, 2 bytes)
+/// - Byte 1-2: Voltage in dV (0.1V) (little endian, 2 bytes)
 /// - Byte 3-4: Current in mA (little endian, 2 bytes)
 /// - Byte 5-7: Power in mW (little endian, 3 bytes)
 fn parse_manufacturer_data(manufacturer_data: &[u8]) -> Option<RatocSystemsMeasurement> {
@@ -25,13 +25,13 @@ fn parse_manufacturer_data(manufacturer_data: &[u8]) -> Option<RatocSystemsMeasu
 
     let relay = manufacturer_data[0] != 0;
 
-    // Voltage in 0.1V units
+    // Voltage in dV (0.1V) (little endian, 2 bytes)
     let voltage_dv = u16::from_le_bytes([manufacturer_data[1], manufacturer_data[2]]);
 
-    // Current in mA
+    // Current in mA (little endian, 2 bytes)
     let current_ma = u16::from_le_bytes([manufacturer_data[3], manufacturer_data[4]]);
 
-    // Power in mW (3 bytes, little endian)
+    // Power in mW (little endian, 3 bytes)
     let power_mw = u32::from_le_bytes([
         manufacturer_data[5],
         manufacturer_data[6],
