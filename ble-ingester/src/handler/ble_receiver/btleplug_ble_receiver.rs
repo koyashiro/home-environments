@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+compile_error!("btleplug feature is not supported on macOS");
+
 use std::collections::HashMap;
 
 use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
