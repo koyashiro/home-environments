@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
 
 use chrono::{Timelike, Utc};
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
@@ -7,12 +7,36 @@ use tracing::{debug, error, info, instrument};
 
 use crate::InMemoryDb;
 
+fn db_path() -> Option<PathBuf> {
+    let home = env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("ble-ingester")
+            .join("data.db"),
+    )
+}
+
 /// Task to write the data closest to 0 seconds from in-memory database to SQLite database
 #[instrument(skip_all)]
 pub async fn sqlite_writer(in_memory_db: Arc<Mutex<InMemoryDb>>) {
+    let Some(path) = db_path() else {
+        error!("failed to get database path: HOME not set");
+        return;
+    };
+
+    if let Some(parent) = path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        error!("failed to create database directory: {e}");
+        return;
+    }
+
+    let url = format!("sqlite:{}?mode=rwc", path.display());
     let pool = match SqlitePoolOptions::new()
         .max_connections(1)
-        .connect("sqlite:data.db?mode=rwc")
+        .connect(&url)
         .await
     {
         Ok(pool) => pool,
