@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     sync::Arc,
     time::Duration,
 };
@@ -11,7 +12,40 @@ use tracing_subscriber::{EnvFilter, fmt::time::ChronoLocal};
 
 const RECEIVE_RANGE: u8 = 10;
 
-pub type MacAddress = [u8; 6];
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
+pub struct MacAddress([u8; 6]);
+
+impl MacAddress {
+    pub const fn new(v: [u8; 6]) -> MacAddress {
+        MacAddress(v)
+    }
+}
+
+impl From<[u8; 6]> for MacAddress {
+    fn from(v: [u8; 6]) -> Self {
+        MacAddress::new(v)
+    }
+}
+
+impl fmt::Debug for MacAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+        )
+    }
+}
+
+impl fmt::Display for MacAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+        )
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct InMemoryDb {
@@ -23,7 +57,7 @@ pub struct InMemoryDb {
 impl InMemoryDb {
     pub fn new() -> InMemoryDb {
         InMemoryDb {
-            switchbot_db: [([0x02, 0x00, 0x00, 0x00, 0x00, 0x01], BTreeMap::new())].into(),
+            switchbot_db: [([0x02, 0x00, 0x00, 0x00, 0x00, 0x01].into(), BTreeMap::new())].into(),
             ratoc_systems_db: HashMap::new(),
         }
     }
@@ -86,7 +120,7 @@ async fn ble_receiver(tx: mpsc::Sender<BleData>) {
     loop {
         // dummy data
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let mac = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let mac = MacAddress::new([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
         let measurements = SwitchBotMeasurements {
             temperature_celsius: 23.2,
             humidity_percent: 33,
@@ -177,7 +211,7 @@ async fn sqlite_writer(in_memory_db: Arc<Mutex<InMemoryDb>>) {
             // TODO: write the data from in in-memory database to SQLite database
 
             info!("write to SQLite db");
-            info!("{in_memory_db:?}");
+            debug!("{in_memory_db:?}");
         }
 
         // Wait until next hh:mm:11
