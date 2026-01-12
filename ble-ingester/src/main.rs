@@ -1,3 +1,5 @@
+mod ble;
+mod config;
 mod handler;
 mod mac_address;
 
@@ -7,9 +9,11 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use config::{Config, DeviceType};
 use handler::{ble_receiver, external_db_writer, in_memory_db_writer, sqlite_writer};
 use mac_address::MacAddress;
 use tokio::sync::{Mutex, mpsc};
+use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt::time::ChronoLocal};
 
 #[derive(Debug, Default)]
@@ -20,10 +24,24 @@ pub struct InMemoryDb {
 }
 
 impl InMemoryDb {
-    pub fn new() -> InMemoryDb {
+    pub fn from_config(config: &Config) -> InMemoryDb {
+        let mut switchbot_db = HashMap::new();
+        let mut ratoc_systems_db = HashMap::new();
+
+        for device in &config.devices {
+            match device.device_type {
+                DeviceType::SwitchBot => {
+                    switchbot_db.insert(device.mac_address, BTreeMap::new());
+                }
+                DeviceType::RatocSystems => {
+                    ratoc_systems_db.insert(device.mac_address, BTreeMap::new());
+                }
+            }
+        }
+
         InMemoryDb {
-            switchbot_db: [([0x02, 0x00, 0x00, 0x00, 0x00, 0x01].into(), BTreeMap::new())].into(),
-            ratoc_systems_db: HashMap::new(),
+            switchbot_db,
+            ratoc_systems_db,
         }
     }
 }
@@ -67,8 +85,20 @@ async fn main() {
         .with_timer(ChronoLocal::new("%Y-%m-%dT%H:%M:%S%.3f%:z".to_string()))
         .init();
 
+    let config = match Config::load() {
+        Ok(config) => {
+            info!("loaded {} devices from config", config.devices.len());
+            config
+        }
+        Err(e) => {
+            error!("failed to load config: {e}");
+            return;
+        }
+    };
+
     let (tx, rx) = mpsc::channel::<BleData>(128);
-    let in_memory_db: Arc<Mutex<InMemoryDb>> = Arc::new(Mutex::new(InMemoryDb::new()));
+    let in_memory_db: Arc<Mutex<InMemoryDb>> =
+        Arc::new(Mutex::new(InMemoryDb::from_config(&config)));
 
     let ble_receiver_handle = tokio::spawn(ble_receiver(tx));
     let in_memory_db_writer_handle = tokio::spawn(in_memory_db_writer(rx, in_memory_db.clone()));
