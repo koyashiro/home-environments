@@ -43,14 +43,14 @@ pub async fn sqlite_writer(in_memory_db: Arc<Mutex<InMemoryDb>>) {
             for (measured_at, (_, m)) in measurements.iter() {
                 let result = sqlx::query(
                     r#"
-                    INSERT OR REPLACE INTO switchbot_measurements (device_id, measured_at, temperature_celsius, humidity_percent, co2_ppm, light_level)
+                    INSERT OR REPLACE INTO switchbot_measurements (device_id, measured_at, temperature_dc, humidity_p, co2_ppm, light_level)
                     VALUES (?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(mac.to_string())
                 .bind(measured_at.to_rfc3339())
-                .bind(m.temperature_celsius)
-                .bind(m.humidity_percent as i32)
+                .bind(m.temperature_dc as i32)
+                .bind(m.humidity_p as i32)
                 .bind(m.co2_ppm.map(|v| v as i32))
                 .bind(m.light_level.map(|v| v as i32))
                 .execute(&pool)
@@ -88,9 +88,9 @@ pub async fn sqlite_writer(in_memory_db: Arc<Mutex<InMemoryDb>>) {
                 .bind(mac.to_string())
                 .bind(measured_at.to_rfc3339())
                 .bind(m.relay)
-                .bind(m.voltage_v as i32)
+                .bind(m.voltage_dv as i32)
                 .bind(m.current_ma as i32)
-                .bind(m.power_w as i32)
+                .bind(m.power_mw as i32)
                 .execute(&pool)
                 .await;
 
@@ -124,8 +124,8 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TABLE IF NOT EXISTS switchbot_measurements (
             device_id TEXT NOT NULL,
             measured_at TEXT NOT NULL,
-            temperature_celsius REAL NOT NULL,
-            humidity_percent INTEGER NOT NULL,
+            temperature_dc INTEGER NOT NULL,
+            humidity_p INTEGER NOT NULL,
             co2_ppm INTEGER,
             light_level INTEGER,
             PRIMARY KEY (device_id, measured_at)

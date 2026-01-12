@@ -48,8 +48,8 @@ impl InMemoryDb {
 
 #[derive(Debug)]
 pub struct SwitchBotMeasurement {
-    pub temperature_celsius: f32,
-    pub humidity_percent: u8,
+    pub temperature_dc: i16,
+    pub humidity_p: u8,
     pub co2_ppm: Option<u16>,
     pub light_level: Option<u8>,
 }
@@ -57,9 +57,9 @@ pub struct SwitchBotMeasurement {
 #[derive(Debug)]
 pub struct RatocSystemsMeasurement {
     pub relay: bool,
-    pub voltage_v: u16,
+    pub voltage_dv: u16,
     pub current_ma: u16,
-    pub power_w: u32,
+    pub power_mw: u32,
 }
 
 #[derive(Debug)]
