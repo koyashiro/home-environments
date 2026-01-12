@@ -3,9 +3,15 @@ name = "ble-ingester"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["mock"]
+btleplug = ["dep:btleplug"]
+mock = ["dep:rand"]
+
 [dependencies]
-btleplug = "0.11.8"
+btleplug = { version = "0.11.8", optional = true }
 chrono = "0.4.42"
+rand = { version = "0.9.2", optional = true }
 serde = "1.0.228"
 serde_yaml = "0.9.34"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "macros", "chrono", "sqlite"] }

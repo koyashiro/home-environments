@@ -1,3 +1,4 @@
+#[cfg(feature = "btleplug")]
 mod ble;
 mod config;
 mod handler;
