@@ -14,8 +14,8 @@ pub struct RatocsystemsMeasurement {
 pub fn decode_rsbtwattch2_ble_data(
     manufacturer_data: &HashMap<u16, Vec<u8>>,
 ) -> Result<RatocsystemsMeasurement> {
-    let ratocsystems_manufacturer_data =
-        get_ratocsystems_manufacturer_data(manufacturer_data).context("failed to get RATOC Systems manufacturer data")?;
+    let ratocsystems_manufacturer_data = get_ratocsystems_manufacturer_data(manufacturer_data)
+        .context("failed to get RATOC Systems manufacturer data")?;
 
     decode_ratocsystems_manufacturer_data(ratocsystems_manufacturer_data)
         .context("failed to decode RATOC Systems manufacturer data")
