@@ -105,7 +105,7 @@ pub async fn sqlite_writer(in_memory_db: Arc<Mutex<InMemoryDb>>) {
             for (measured_at, (_, m)) in measurements.iter() {
                 let result = sqlx::query(
                     r#"
-                    INSERT OR REPLACE INTO ratoc_systems_measurements (device_id, measured_at, relay, voltage_v, current_ma, power_w)
+                    INSERT OR REPLACE INTO ratoc_systems_measurements (device_id, measured_at, relay, voltage_dv, current_ma, power_mw)
                     VALUES (?, ?, ?, ?, ?, ?)
                     "#,
                 )
@@ -165,9 +165,9 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             device_id TEXT NOT NULL,
             measured_at TEXT NOT NULL,
             relay INTEGER NOT NULL,
-            voltage_v INTEGER NOT NULL,
+            voltage_dv INTEGER NOT NULL,
             current_ma INTEGER NOT NULL,
-            power_w INTEGER NOT NULL,
+            power_mw INTEGER NOT NULL,
             PRIMARY KEY (device_id, measured_at)
         )
         "#,
